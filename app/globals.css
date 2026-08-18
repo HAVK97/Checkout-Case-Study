@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+:root {
+  --ok: #15803d;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  --unverified: #9ca3af;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.highlight-rect {
+  position: absolute;
+  z-index: 10;
+  background: rgba(250, 204, 21, 0.38);
+  border: 2px solid rgb(217, 119, 6);
+  border-radius: 2px;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}

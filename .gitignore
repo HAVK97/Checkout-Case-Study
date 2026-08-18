@@ -1,0 +1,19 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# Env
+.env
+.env.local
+
+# App cache (parsed docs, workups, uploaded batches)
+.cache/
+
+# OS / editor
+.DS_Store
+*.log
