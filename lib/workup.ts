@@ -2,7 +2,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import fs from "node:fs";
 import path from "node:path";
-import type { ParsedDoc, RawCase, RequirementStatus, WorkupDraft } from "./types";
+import type {
+  ParsedDoc,
+  RawCase,
+  RemediationStatus,
+  RequirementStatus,
+  WorkupDraft,
+} from "./types";
 import { getReasonCode } from "./rules";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
@@ -18,11 +24,6 @@ const STATUSES: RequirementStatus[] = ["satisfied", "partial", "missing", "n/a"]
 const SUBMIT_WORKUP_SCHEMA = {
   type: "object" as const,
   properties: {
-    reasonSummary: {
-      type: "string",
-      description:
-        "Plain-English summary (2-4 sentences) of the issuer's allegation and what the scheme requires the merchant to prove to win representment.",
-    },
     requirements: {
       type: "array",
       items: {
@@ -62,31 +63,33 @@ const SUBMIT_WORKUP_SCHEMA = {
             type: ["string", "null"],
             description: "If not satisfied, what specifically is missing or weak. Null if satisfied.",
           },
+          remediation: {
+            type: "string",
+            enum: ["requestable", "not_requestable", "not_needed"],
+            description:
+              "Use requestable only when the merchant could realistically provide evidence that closes this gap; not_requestable when more evidence cannot cure it; not_needed when satisfied or n/a.",
+          },
+          request: {
+            type: ["string", "null"],
+            description:
+              "Exact document or fact to request when remediation is requestable; otherwise null.",
+          },
         },
-        required: ["id", "status", "citations", "gap"],
+        required: ["id", "status", "citations", "gap", "remediation", "request"],
       },
     },
     rationale: {
       type: "string",
       description:
-        "3-5 short, standalone factual sentences explaining the decision. Each sentence must state one material fact, requirement gap, or direct consequence. No introductions, repetition, generic commentary, or filler.",
-    },
-    proposedAction: {
-      type: "string",
-      enum: ["represent", "accept_liability", "request_more_evidence"],
-    },
-    askMerchant: {
-      type: "array",
-      items: { type: "string" },
-      description: "Specific documents or facts to request from the merchant. Required (non-empty) if proposedAction is request_more_evidence.",
+        "3-5 short factual points explaining the evidence assessment, one per line, each prefixed with '- ' (dash and space). Each point must state one material fact, requirement gap, or direct consequence. No introductions, repetition, generic commentary, or filler.",
     },
   },
-  required: ["reasonSummary", "requirements", "rationale", "proposedAction", "askMerchant"],
+  required: ["requirements", "rationale"],
 };
 
 const SYSTEM_PROMPT = `You are a chargeback representment analyst assistant for a payments company that acquires card-not-present (CNP) transactions.
 
-You are given ONE chargeback case: the scheme reason code, the issuer's narrative, transaction metadata, parsed document text, and the original pixels for image evidence. Your job is to check the merchant's evidence against the scheme's compelling-evidence requirements for this reason code and produce a structured workup. You do NOT make the final call — you propose one, and a human analyst reviews and can override every field.
+You are given ONE chargeback case: the scheme reason code, the issuer's narrative, transaction metadata, parsed document text, and the original pixels for image evidence. Your job is to check the merchant's evidence against the scheme's compelling-evidence requirements for this reason code and produce a structured workup. You do NOT choose the final action — code computes that from your requirement statuses. A human analyst reviews and can override every field.
 
 Rules you must follow exactly:
 1. For every requirement listed, decide "satisfied", "partial", or "missing" based ONLY on the evidence text given below. Never invent facts, dates, names, or numbers that are not present in the evidence.
@@ -94,9 +97,9 @@ Rules you must follow exactly:
 3. Cite the smallest complete semantic region. For tables, cite a table-row region, never an individual cell. For prose spanning wrapped lines, include every consecutive line region containing the quote.
 4. For non-text facts directly visible in an attached image, use evidenceKind "visual_observation", set page to null, set regionIds to [], and describe only what is literally visible. State material limitations (for example, "front view only; structural damage cannot be assessed"). Never use visual_observation for text that is available in the parsed OCR.
 5. Use the exact file name from the evidence header/image label. A visual observation may support a requirement, but it must never infer hidden condition, identity, ownership, dates, or events that the pixels do not establish.
-6. "rationale" is 3-5 short, standalone factual sentences that fully explain the decision. Every sentence must add a material fact, requirement gap, or direct consequence. Omit introductions, repetition, generic statements, and filler. Use concrete names, dates, amounts, and mismatches where relevant.
-7. "proposedAction" is your own recommendation: "represent" (evidence supports fighting the chargeback), "accept_liability" (evidence doesn't support representment, or this reason code cannot be represented), or "request_more_evidence" (evidence is close but has a specific, fixable gap).
-8. If "proposedAction" is "request_more_evidence", "askMerchant" MUST list the exact document(s) or fact(s) still needed. Otherwise "askMerchant" should be an empty array.`;
+6. "rationale" is 3-5 short factual points, one per line, each prefixed with "- " (dash and space). Every point must add a material fact, requirement gap, or direct consequence. Omit introductions, repetition, generic statements, and filler. Use concrete names, dates, amounts, and mismatches where relevant.
+7. For every requirement, set "remediation". Use "not_needed" for satisfied or n/a requirements. For partial or missing requirements, use "requestable" only when the case or submitted evidence gives a concrete reason to believe the merchant can provide a specific document or fact that would close the gap; set "request" to that exact item. Do not request hypothetical evidence merely because it would be useful. Use "not_requestable" with request null when additional evidence cannot cure the requirement, the known facts contradict it, the requirement is inherently unavailable, or there is no case-specific indication that the evidence exists.
+8. Do not decide the final action. Code applies the reason-code ALL, ANY-N, and exception rules after citations are verified.`;
 
 function buildEvidenceBlock(doc: ParsedDoc): string {
   const mode =
@@ -242,7 +245,14 @@ function normalizeDraft(input: Record<string, unknown>, requirementIds: string[]
         typeof r === "object" && r !== null && (r as Record<string, unknown>).id === id
     );
     if (!found) {
-      return { id, status: "missing" as RequirementStatus, citations: [], gap: "Not addressed in the model's output." };
+      return {
+        id,
+        status: "missing" as RequirementStatus,
+        citations: [],
+        gap: "Not addressed in the model's output.",
+        remediation: "not_requestable" as RemediationStatus,
+        request: null,
+      };
     }
 
     const status: RequirementStatus = STATUSES.includes(found.status as RequirementStatus)
@@ -266,29 +276,27 @@ function normalizeDraft(input: Record<string, unknown>, requirementIds: string[]
           }))
           .filter((c) => c.file && c.quote)
       : [];
+    const request =
+      typeof found.request === "string" && found.request.trim() ? found.request.trim() : null;
+    const remediation: RemediationStatus =
+      status === "satisfied" || status === "n/a"
+        ? "not_needed"
+        : found.remediation === "requestable" && request
+          ? "requestable"
+          : "not_requestable";
 
     return {
       id,
       status,
       citations,
       gap: typeof found.gap === "string" ? found.gap : null,
+      remediation,
+      request: remediation === "requestable" ? request : null,
     };
   });
 
-  const proposedAction =
-    input.proposedAction === "represent" ||
-    input.proposedAction === "accept_liability" ||
-    input.proposedAction === "request_more_evidence"
-      ? input.proposedAction
-      : "request_more_evidence";
-
   return {
-    reasonSummary: typeof input.reasonSummary === "string" ? input.reasonSummary : "",
     requirements,
     rationale: typeof input.rationale === "string" ? input.rationale : "",
-    proposedAction,
-    askMerchant: Array.isArray(input.askMerchant)
-      ? input.askMerchant.filter((s): s is string => typeof s === "string")
-      : [],
   };
 }

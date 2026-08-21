@@ -1,24 +1,21 @@
 import type { Action, MatchRule, RequirementResult } from "./types";
 
 // The recommended action is computed here, in code, from verified
-// requirement statuses — never taken as-is from the LLM. See docs/PDR.md
-// §6.3. `proposedAction` (the model's own opinion) is kept alongside this
-// for the analyst to compare; disagreement is surfaced, not hidden.
+// requirement statuses — never taken from the LLM. See docs/PDR.md §6.3.
 export function computeRuleAction(
   match: MatchRule,
-  requirements: RequirementResult[],
-  askMerchant: string[]
+  requirements: RequirementResult[]
 ): Action {
   if (match.type === "exception") {
     const proven = requirements.some(
-      (r) => r.status === "satisfied" && r.citations.some((c) => c.verified)
+      (r) => r.status === "satisfied" && r.citations.some((c) => c.textVerified)
     );
     return proven ? "represent" : "accept_liability";
   }
 
   const relevant = requirements.filter((r) => r.status !== "n/a");
   const verifiedSatisfied = relevant.filter(
-    (r) => r.status === "satisfied" && r.citations.some((c) => c.verified)
+    (r) => r.status === "satisfied" && r.citations.some((c) => c.textVerified)
   );
 
   const threshold = match.type === "any" ? match.n : relevant.length;
@@ -27,10 +24,19 @@ export function computeRuleAction(
     return "represent";
   }
 
-  const hasFixableGap = relevant.some(
+  const unmet = relevant.filter(
     (r) => r.status === "missing" || r.status === "partial"
   );
-  if (hasFixableGap && askMerchant.length > 0) {
+  const requestable = unmet.filter(
+    (r) => r.remediation === "requestable" && !!r.request
+  );
+
+  const canReachThreshold =
+    match.type === "all"
+      ? unmet.length > 0 && requestable.length === unmet.length
+      : verifiedSatisfied.length + requestable.length >= threshold;
+
+  if (canReachThreshold) {
     return "request_more_evidence";
   }
 

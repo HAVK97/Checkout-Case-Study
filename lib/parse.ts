@@ -13,10 +13,7 @@ import type { ParsedDoc, ParsedPage, ParsedRegion, Rect } from "./types";
 // locally (no API key), and its typed `blocks` (table cells with real text +
 // bbox) and `textItems` (grouped into visual lines below) give reliable,
 // testable grounding for both PDFs and images (LiteParse OCRs images
-// natively — see docs/PDR.md §9). When LLAMA_CLOUD_API_KEY is set, LlamaParse
-// is additionally used to upgrade each page's *text* (better structure on
-// complex layouts) — but never for bounding boxes, so the highlight path
-// works identically with or without a LlamaCloud key.
+// natively — see docs/PDR.md §9).
 
 const PARSE_CACHE_DIR = path.join(process.cwd(), ".cache", "parse");
 const PARSE_CACHE_VERSION = "v4-canonical-regions";
@@ -27,11 +24,10 @@ function ensureCacheDir(): void {
 
 function hashFile(absPath: string): string {
   const buf = fs.readFileSync(absPath);
-  const parserMode = process.env.LLAMA_CLOUD_API_KEY ? "llamaparse" : "liteparse";
   return crypto
     .createHash("sha256")
     .update(buf)
-    .update(`${PARSE_CACHE_VERSION}:${parserMode}`)
+    .update(PARSE_CACHE_VERSION)
     .digest("hex");
 }
 
@@ -69,22 +65,11 @@ export async function parseDocument(
   const kind: "pdf" | "image" = isImage(basename) ? "image" : "pdf";
   const doc = await parseWithLiteParse(absPath, basename, kind);
 
-  if (process.env.LLAMA_CLOUD_API_KEY) {
-    try {
-      await enrichWithLlamaParseText(absPath, doc);
-    } catch (err) {
-      console.warn(
-        `[parse] LlamaParse text enrichment failed for ${basename}, keeping LiteParse text:`,
-        (err as Error).message
-      );
-    }
-  }
-
   writeCache(hash, doc);
   return doc;
 }
 
-// ---- LiteParse: text + grounding (always runs) ----
+// ---- LiteParse: text + grounding ----
 
 async function parseWithLiteParse(
   absPath: string,
@@ -252,33 +237,4 @@ function groupTextItemsIntoLines(items: LiteTextItem[], pageNumber: number): Par
     }
   }
   return lines;
-}
-
-// ---- LlamaParse: optional text-quality upgrade (never used for bboxes) ----
-
-async function enrichWithLlamaParseText(
-  absPath: string,
-  doc: ParsedDoc
-): Promise<void> {
-  const { default: LlamaCloud } = await import("@llamaindex/llama-cloud");
-  const client = new LlamaCloud();
-
-  const result = await client.parsing.parse({
-    tier: "cost_effective",
-    version: "latest",
-    upload_file: fs.createReadStream(absPath),
-    expand: ["markdown"],
-  });
-
-  const pages = result.markdown?.pages;
-  if (!pages || pages.length === 0) return;
-
-  for (const page of pages) {
-    if (!("markdown" in page) || !page.success) continue;
-    const target = doc.pages.find((p) => p.pageNumber === page.page_number);
-    if (target && page.markdown.trim()) {
-      target.text = page.markdown;
-    }
-  }
-  doc.source = "llamaparse";
 }

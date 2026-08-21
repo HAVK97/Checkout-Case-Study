@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { Action, Batch, CaseRecord, Citation, Rect } from "@/lib/types";
+import type { Action, Batch, CaseRecord } from "@/lib/types";
 import { Inbox } from "@/components/inbox";
 import { WorkupPane } from "@/components/workup-pane";
 import { SourceViewer, type SelectedCitation } from "@/components/source-viewer";
@@ -77,29 +77,9 @@ function QueueInner() {
     setSelectedCitation(null);
   };
 
-  const handleSelectCitation = (
-    file: string,
-    page: number | null,
-    rects: Rect[],
-    sourceWidth?: number,
-    evidenceKind?: Citation["evidenceKind"],
-    quote?: string,
-    textVerified?: boolean,
-    locationResolved?: boolean,
-    highlightUnit?: Citation["highlightUnit"]
-  ) => {
-    setSelectedFile(file);
-    setSelectedCitation({
-      file,
-      page,
-      rects,
-      sourceWidth,
-      evidenceKind,
-      quote,
-      textVerified,
-      locationResolved,
-      highlightUnit,
-    });
+  const handleSelectCitation = (citation: SelectedCitation) => {
+    setSelectedFile(citation.file);
+    setSelectedCitation(citation);
   };
 
   const handleConfirm = async (analystAction: Action, analystRationale: string) => {
@@ -116,7 +96,6 @@ function QueueInner() {
     }
     const updatedCase: CaseRecord = await res.json();
 
-    const cases = batch.cases.map((c) => (c.caseId === updatedCase.caseId ? updatedCase : c));
     // Update the inbox from the confirmed server response immediately. Its
     // action badge prefers workup.analystAction, so analyst overrides replace
     // the recommendation tag as soon as the review is saved.
@@ -131,7 +110,7 @@ function QueueInner() {
         : current
     );
 
-    const nextUnreviewed = cases.find((c) => c.status !== "reviewed" && c.caseId !== updatedCase.caseId);
+    const nextUnreviewed = batch.cases.find((c) => c.status !== "reviewed" && c.caseId !== updatedCase.caseId);
     if (nextUnreviewed) handleSelectCase(nextUnreviewed.caseId);
   };
 

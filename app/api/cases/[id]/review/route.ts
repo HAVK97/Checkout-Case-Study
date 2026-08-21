@@ -10,10 +10,9 @@ interface ReviewBody {
   analystRationale?: unknown;
 }
 
-// Analyst override: writes analyst_action/analyst_rationale/reviewed_at
-// alongside (never over) the model's own proposedAction — see docs/PDR.md
-// §6.4 (governance). The queue UI selects the next unreviewed case after
-// this succeeds.
+// Analyst override: writes analyst_action/analyst_rationale/reviewed_at.
+// The recommended action (ruleAction) is computed in code from verified
+// requirement statuses — see docs/PDR.md §6.4 (governance).
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }

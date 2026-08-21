@@ -3,6 +3,7 @@ export type Scheme = "visa" | "mastercard";
 export type Action = "represent" | "accept_liability" | "request_more_evidence";
 
 export type RequirementStatus = "satisfied" | "partial" | "missing" | "n/a";
+export type RemediationStatus = "requestable" | "not_requestable" | "not_needed";
 
 export interface RawCase {
   case_id: string;
@@ -77,7 +78,7 @@ export interface ParsedPage {
   regions: ParsedRegion[]; // canonical LiteParse text + geometry used for citations
 }
 
-export type ParseSource = "llamaparse" | "liteparse" | "none";
+export type ParseSource = "liteparse" | "none";
 
 export interface ParsedDoc {
   file: string; // basename
@@ -96,7 +97,6 @@ export interface Citation {
   quote: string;
   regionIds: string[];
   rects: Rect[];
-  verified: boolean; // backwards-compatible alias for textVerified
   textVerified: boolean;
   locationResolved: boolean;
   evidenceKind: "text_quote" | "visual_observation";
@@ -111,13 +111,13 @@ export interface RequirementResult {
   status: RequirementStatus;
   citations: Citation[];
   gap: string | null;
+  remediation: RemediationStatus;
+  request: string | null;
 }
 
 export interface Workup {
-  reasonSummary: string;
   requirements: RequirementResult[];
   rationale: string;
-  proposedAction: Action;
   ruleAction: Action;
   askMerchant: string[];
   analystAction?: Action;
@@ -140,14 +140,13 @@ export interface WorkupDraftRequirement {
   status: RequirementStatus;
   citations: WorkupDraftCitation[];
   gap: string | null;
+  remediation: RemediationStatus;
+  request: string | null;
 }
 
 export interface WorkupDraft {
-  reasonSummary: string;
   requirements: WorkupDraftRequirement[];
   rationale: string;
-  proposedAction: Action;
-  askMerchant: string[];
 }
 
 // ---- Case / batch orchestration ----

@@ -169,7 +169,6 @@ function resolveCitation(
       quote,
       regionIds,
       rects: [],
-      verified: false,
       textVerified: false,
       locationResolved: false,
       evidenceKind,
@@ -187,7 +186,6 @@ function resolveCitation(
       quote,
       regionIds: [],
       rects: [],
-      verified: isGroundedImage,
       textVerified: isGroundedImage,
       locationResolved: false,
       evidenceKind,
@@ -207,7 +205,6 @@ function resolveCitation(
       quote,
       regionIds,
       rects: [],
-      verified: false,
       textVerified: false,
       locationResolved: false,
       evidenceKind,
@@ -226,7 +223,6 @@ function resolveCitation(
       quote,
       regionIds,
       rects: [],
-      verified: false,
       textVerified: false,
       locationResolved: false,
       evidenceKind,
@@ -241,7 +237,6 @@ function resolveCitation(
     quote,
     regionIds: match.regionIds,
     rects: match.rects,
-    verified: true,
     textVerified: true,
     locationResolved: match.rects.length > 0,
     evidenceKind,
@@ -265,29 +260,55 @@ export function resolveWorkup(
         status: "missing",
         citations: [],
         gap: "Not addressed in the model's output.",
+        remediation: "not_requestable",
+        request: null,
       };
     }
 
     const citations = draftReq.citations.map((c) =>
       resolveCitation(c.file, c.page, c.quote, c.regionIds, c.evidenceKind, docsByFile)
     );
-    const hasVerifiedCitation = citations.some((c) => c.verified);
+    const hasVerifiedCitation = citations.some((c) => c.textVerified);
 
     // Unverified citations cannot carry a "satisfied" status — this is what
     // keeps a hallucinated quote from silently becoming a green checkmark.
     const status = draftReq.status === "satisfied" && !hasVerifiedCitation ? "partial" : draftReq.status;
+    const verificationFailed = status === "partial" && draftReq.status === "satisfied";
+    const remediation = verificationFailed ? "requestable" : draftReq.remediation;
+    const request = verificationFailed
+      ? `Verifiable evidence for: ${reqDef.label}`
+      : draftReq.request;
 
-    return { id: reqDef.id, label: reqDef.label, status, citations, gap: draftReq.gap };
+    return {
+      id: reqDef.id,
+      label: reqDef.label,
+      status,
+      citations,
+      gap: verificationFailed
+        ? (draftReq.gap ?? "The cited evidence could not be independently verified.")
+        : draftReq.gap,
+      remediation,
+      request,
+    };
   });
 
-  const ruleAction = computeRuleAction(reasonCode.match, requirements, draft.askMerchant);
+  const ruleAction = computeRuleAction(reasonCode.match, requirements);
+  const askMerchant =
+    ruleAction === "request_more_evidence"
+      ? [
+          ...new Set(
+            requirements
+              .filter((req) => req.remediation === "requestable")
+              .map((req) => req.request)
+              .filter((request): request is string => !!request)
+          ),
+        ]
+      : [];
 
   return {
-    reasonSummary: draft.reasonSummary,
     requirements,
     rationale: draft.rationale,
-    proposedAction: draft.proposedAction,
     ruleAction,
-    askMerchant: draft.askMerchant,
+    askMerchant,
   };
 }

@@ -1,4 +1,4 @@
-import type { ReasonCodeDef } from "./types";
+import type { MatchRule, ReasonCodeDef } from "./types";
 
 // Hand-coded from docs/reason_codes.md. These are simplified take-home rules,
 // not real Visa VCR / Mastercard Chargeback Guide requirements — see that
@@ -194,6 +194,12 @@ export const REASON_CODES: ReasonCodeDef[] = [
     ],
   },
 ];
+
+export function matchRuleIntro(match: MatchRule): string {
+  if (match.type === "all") return "Merchant must satisfy all of the following:";
+  if (match.type === "any") return `Merchant must satisfy at least ${match.n} of the following:`;
+  return "Representment is only available if the merchant can prove:";
+}
 
 export function getReasonCode(scheme: string, code: string): ReasonCodeDef {
   const def = REASON_CODES.find((r) => r.scheme === scheme && r.code === code);

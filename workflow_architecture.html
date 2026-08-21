@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chargeback Representment — Workflow Diagram</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  html, body { background-color: #0b0f19; }
+  #mermaid-flow svg { width: 100% !important; height: auto !important; }
+</style>
+</head>
+<body class="min-h-screen bg-[#0b0f19] text-slate-200 font-sans antialiased">
+
+<div class="mx-auto max-w-5xl px-6 py-10">
+  <h1 class="text-xl font-semibold text-white">Chargeback Representment — How It Works</h1>
+  <p class="mt-2 text-sm leading-6 text-slate-400">
+  <strong class="text-slate-200">In one line:</strong> Claude fills in a form → code marks it against real OCR text →
+  code applies the Visa/Mastercard rulebook → the analyst sees the graded form and signs off.
+  </p>
+
+  <!-- legend -->
+  <div class="mt-5 flex flex-wrap gap-4 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-xs text-slate-300">
+    <span class="flex items-center gap-2"><span class="inline-block h-2.5 w-2.5 rounded-sm" style="background:#818cf8"></span>Human / UI</span>
+    <span class="flex items-center gap-2"><span class="inline-block h-2.5 w-2.5 rounded-sm" style="background:#34d399"></span>Local tool (LiteParse)</span>
+    <span class="flex items-center gap-2"><span class="inline-block h-2.5 w-2.5 rounded-sm" style="background:#f472b6"></span>AI / LLM (Claude)</span>
+    <span class="flex items-center gap-2"><span class="inline-block h-2.5 w-2.5 rounded-sm" style="background:#fbbf24"></span>Deterministic code</span>
+    <span class="flex items-center gap-2"><span class="inline-block h-2.5 w-2.5 rounded-sm" style="background:#38bdf8"></span>Human decision</span>
+  </div>
+
+  <div class="mt-6 overflow-x-auto rounded-2xl border border-slate-800 bg-[#121826] p-4">
+    <div id="mermaid-flow" class="min-w-[900px]">
+      <pre class="mermaid">
+flowchart TD
+    A["<b>1. Upload batch</b><br/>cases.json + evidence files<br/>→ cases mapped to files; missing flagged"]:::human
+
+    B["<b>2. LiteParse</b> (local OCR, no API key)<br/>→ text + exact pixel boxes per line/row<br/>→ images tagged text / visual / mixed"]:::local
+
+    C["<b>3. Claude proposes</b> (internal only — analyst never sees this)<br/>For each requirement: status, quote, gap,<br/>and whether more docs might help<br/><br/>Images: text → OCR only<br/>visual/mixed → raw pixels sent too"]:::ai
+
+    D["<b>4. Code verifies + decides</b><br/>• Re-checks every quote against real OCR text<br/>• Fake 'satisfied' claims → downgraded to partial<br/>• Applies Visa/MC ALL / ANY-N / EXCEPTION rules<br/>→ produces the <b>verified Workup</b> shown in UI"]:::gov
+
+    F{"Recommended action"}:::gov
+    F1["Represent"]:::gov
+    F2["Request more evidence"]:::gov
+    F3["Accept liability"]:::gov
+
+    G["<b>5. Analyst reviews &amp; signs off</b><br/>Sees verified workup + citations highlighted<br/>on original PDF/image<br/>→ confirms or overrides action + rationale"]:::human
+
+    A --> B --> C --> D --> F
+    F -->|"enough verified requirements"| F1 --> G
+    F -->|"gaps still fixable with more docs"| F2 --> G
+    F -->|"not fixable"| F3 --> G
+
+    classDef human fill:#312e81,stroke:#818cf8,stroke-width:1.5px,color:#e0e7ff,rx:8,ry:8
+    classDef local fill:#064e3b,stroke:#34d399,stroke-width:1.5px,color:#d1fae5,rx:8,ry:8
+    classDef ai fill:#831843,stroke:#f472b6,stroke-width:1.5px,color:#fce7f3,rx:8,ry:8
+    classDef gov fill:#78350f,stroke:#fbbf24,stroke-width:1.5px,color:#fef3c7,rx:8,ry:8
+      </pre>
+    </div>
+  </div>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      background: '#121826',
+      primaryColor: '#171f30',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#374151',
+      lineColor: '#475569',
+      fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    },
+    flowchart: { curve: 'basis', htmlLabels: true, useMaxWidth: true },
+  });
+</script>
+
+</body>
+</html>

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { getReasonCode } from "@/lib/rules";
+import { useEffect, useState } from "react";
+import { getReasonCode, matchRuleIntro } from "@/lib/rules";
 import type { Action, CaseRecord, Citation, Rect, RequirementResult } from "@/lib/types";
+import type { SelectedCitation } from "@/components/source-viewer";
 
 const STATUS_STYLE: Record<string, string> = {
   satisfied: "text-emerald-700",
@@ -34,15 +35,52 @@ function ActionBadge({ action }: { action: Action }) {
   return <span className={`font-semibold ${ACTION_TEXT_STYLE[action]}`}>{action.replace(/_/g, " ")}</span>;
 }
 
-function Chip({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+function TransactionSignalsStrip({
+  avs,
+  cvv,
+  threeDs,
+  billingPostcode,
+  shippingPostcode,
+  billingShippingMismatch,
+}: {
+  avs: string | null;
+  cvv: string | null;
+  threeDs: string;
+  billingPostcode: string;
+  shippingPostcode: string | null;
+  billingShippingMismatch: boolean;
+}) {
+  const segments: { key: string; label: string; value: string; warn?: boolean }[] = [
+    { key: "avs", label: "AVS", value: avs ?? "n/a" },
+    { key: "cvv", label: "CVV", value: cvv ?? "n/a" },
+    { key: "3ds", label: "3DS", value: threeDs.replace(/_/g, " ") },
+  ];
+
+  if (billingShippingMismatch && shippingPostcode != null) {
+    segments.push({
+      key: "postcodes",
+      label: "Postcodes",
+      value: `${billingPostcode} ≠ ${shippingPostcode}`,
+      warn: true,
+    });
+  } else if (shippingPostcode != null) {
+    segments.push({ key: "postcodes", label: "Postcodes", value: "match" });
+  }
+
   return (
-    <span
-      className={`rounded border px-2 py-1 ${
-        warn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-slate-200 bg-slate-50 text-slate-600"
-      }`}
-    >
-      <span className="font-medium">{label}:</span> {value}
-    </span>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+      {segments.map((segment, index) => (
+        <span key={segment.key} className="flex items-baseline gap-1">
+          {index > 0 && <span className="mr-1 text-slate-300">·</span>}
+          <span className="font-medium text-slate-500">
+            {segment.label}
+          </span>
+          <span className={segment.warn ? "font-medium text-amber-700" : "text-slate-600"}>
+            {segment.value}
+          </span>
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -67,6 +105,19 @@ function decisionBullets(rationale: string): string[] {
     .filter(Boolean);
 }
 
+function formatRationaleForEditor(text: string): string {
+  if (!text.trim()) return "";
+  if (/^\s*[-•*]\s/m.test(text)) return text;
+  return decisionBullets(text)
+    .map((line) => `- ${line}`)
+    .join("\n");
+}
+
+function initialRationale(workup: NonNullable<CaseRecord["workup"]>): string {
+  if (workup.analystRationale) return workup.analystRationale;
+  return formatRationaleForEditor(workup.rationale);
+}
+
 function RequirementRow({
   req,
   sourceNumbers,
@@ -76,70 +127,59 @@ function RequirementRow({
   req: RequirementResult;
   sourceNumbers: Map<string, number>;
   sourceRects: Map<string, Rect[]>;
-  onSelectCitation: (
-    file: string,
-    page: number | null,
-    rects: Rect[],
-    sourceWidth?: number,
-    evidenceKind?: Citation["evidenceKind"],
-    quote?: string,
-    textVerified?: boolean,
-    locationResolved?: boolean,
-    highlightUnit?: Citation["highlightUnit"]
-  ) => void;
+  onSelectCitation: (citation: SelectedCitation) => void;
 }) {
   const seen = new Set<number>();
   return (
     <div className="border-b border-slate-100 py-3 last:border-b-0">
-      <div className="grid grid-cols-[20px_1fr_auto] items-start gap-2">
+      <div className="grid grid-cols-[20px_1fr] items-start gap-2">
         <span className={`text-base font-semibold leading-5 ${STATUS_STYLE[req.status]}`} aria-hidden="true">
           {STATUS_ICON[req.status]}
         </span>
         <div>
           <div className="text-sm font-medium leading-5 text-slate-800">{req.label}</div>
           {req.gap && <p className="mt-1 text-xs leading-5 text-slate-600">{req.gap}</p>}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className={`text-[10px] font-semibold uppercase tracking-wide ${STATUS_STYLE[req.status]}`}>
-            {req.status === "satisfied" ? "Met" : req.status}
-          </span>
-          {req.citations.map((citation, index) => {
-            const key = citationSourceKey(citation);
-            const sourceNumber = sourceNumbers.get(key) ?? index + 1;
-            if (seen.has(sourceNumber)) return null;
-            seen.add(sourceNumber);
-            const mergedRects = sourceRects.get(key) ?? citation.rects;
-            const textVerified = citation.textVerified ?? citation.verified;
-            const locationResolved = mergedRects.length > 0;
-            return (
-              <button
-                key={`${citation.file}:${citation.page}:${index}`}
-                onClick={() =>
-                  onSelectCitation(
-                    citation.file,
-                    citation.page,
-                    mergedRects,
-                    citation.sourceWidth,
-                    citation.evidenceKind,
-                    citation.quote,
-                    textVerified,
-                    locationResolved,
-                    citation.highlightUnit
-                  )
-                }
-                title={`${citation.file}${citation.page != null ? `, page ${citation.page}` : ""}`}
-                aria-label={`Open source ${sourceNumber}: ${citation.file}`}
-                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
-                  citation.verified || citation.evidenceKind === "visual_observation"
-                    ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    : "border border-dashed border-slate-300 text-slate-400 hover:bg-slate-50"
-                }`}
-              >
-                [{sourceNumber}
-                {!locationResolved ? (textVerified ? " page" : " ?") : ""}]
-              </button>
-            );
-          })}
+          {req.citations.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {req.citations.map((citation, index) => {
+                const key = citationSourceKey(citation);
+                const sourceNumber = sourceNumbers.get(key) ?? index + 1;
+                if (seen.has(sourceNumber)) return null;
+                seen.add(sourceNumber);
+                const mergedRects = sourceRects.get(key) ?? citation.rects;
+                const textVerified = citation.textVerified;
+                const locationResolved = mergedRects.length > 0;
+                return (
+                  <button
+                    key={`${citation.file}:${citation.page}:${index}`}
+                    onClick={() =>
+                      onSelectCitation({
+                        file: citation.file,
+                        page: citation.page,
+                        rects: mergedRects,
+                        sourceWidth: citation.sourceWidth,
+                        evidenceKind: citation.evidenceKind,
+                        quote: citation.quote,
+                        textVerified,
+                        locationResolved,
+                        highlightUnit: citation.highlightUnit,
+                      })
+                    }
+                    title={`${citation.file}${citation.page != null ? `, page ${citation.page}` : ""}`}
+                    aria-label={`Open source ${sourceNumber}: ${citation.file}`}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
+                      citation.textVerified || citation.evidenceKind === "visual_observation"
+                        ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        : "border border-dashed border-slate-300 text-slate-400 hover:bg-slate-50"
+                    }`}
+                  >
+                    [{sourceNumber}
+                    {!locationResolved ? (textVerified ? " page" : " ?") : ""}]
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -152,17 +192,7 @@ export function WorkupPane({
   onConfirm,
 }: {
   caseRecord: CaseRecord;
-  onSelectCitation: (
-    file: string,
-    page: number | null,
-    rects: Rect[],
-    sourceWidth?: number,
-    evidenceKind?: Citation["evidenceKind"],
-    quote?: string,
-    textVerified?: boolean,
-    locationResolved?: boolean,
-    highlightUnit?: Citation["highlightUnit"]
-  ) => void;
+  onSelectCitation: (citation: SelectedCitation) => void;
   onConfirm: (action: Action, rationale: string) => Promise<void>;
 }) {
   const { raw, workup } = caseRecord;
@@ -170,9 +200,23 @@ export function WorkupPane({
   const [analystAction, setAnalystAction] = useState<Action>(
     workup?.analystAction ?? workup?.ruleAction ?? "request_more_evidence"
   );
-  const [rationale, setRationale] = useState(workup?.analystRationale ?? workup?.rationale ?? "");
+  const [rationale, setRationale] = useState(
+    workup ? initialRationale(workup) : ""
+  );
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!workup) return;
+    setAnalystAction(workup.analystAction ?? workup.ruleAction ?? "request_more_evidence");
+    setRationale(initialRationale(workup));
+  }, [
+    caseRecord.caseId,
+    workup?.rationale,
+    workup?.analystRationale,
+    workup?.analystAction,
+    workup?.ruleAction,
+  ]);
 
   if (caseRecord.status === "mapping" || caseRecord.status === "parsing") {
     return <div className="p-4 text-sm text-slate-500">Parsing evidence…</div>;
@@ -192,7 +236,6 @@ export function WorkupPane({
   const billingShippingMismatch =
     raw.transaction.shipping_address_postcode != null &&
     raw.transaction.shipping_address_postcode !== raw.transaction.billing_address_postcode;
-  const disagreement = workup.proposedAction !== workup.ruleAction;
   const applicableRequirements = workup.requirements.filter((req) => req.status !== "n/a");
   const metRequirements = applicableRequirements.filter((req) => req.status === "satisfied").length;
   const sourceNumbers = new Map<string, number>();
@@ -235,7 +278,34 @@ export function WorkupPane({
         <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
           {raw.scheme.toUpperCase()} {raw.reason_code} · {reasonCode.label}
         </div>
-        <p className="mt-2 text-sm leading-6 text-slate-600">{workup.reasonSummary}</p>
+        <section className="mt-5">
+          <h2 className="text-sm font-semibold text-slate-900">Issuer claim</h2>
+          <p className="mt-1.5 text-sm leading-6 text-slate-600">{raw.issuer_narrative}</p>
+        </section>
+        <div className="mt-3.5">
+          <TransactionSignalsStrip
+            avs={raw.transaction.avs_result}
+            cvv={raw.transaction.cvv_result}
+            threeDs={raw.transaction.three_ds_status}
+            billingPostcode={raw.transaction.billing_address_postcode}
+            shippingPostcode={raw.transaction.shipping_address_postcode}
+            billingShippingMismatch={billingShippingMismatch}
+          />
+        </div>
+        <section className="mt-6">
+          <h2 className="text-sm font-semibold text-slate-900">To defend</h2>
+          <p className="mt-1.5 text-sm leading-6 text-slate-700">
+            {matchRuleIntro(reasonCode.match)}
+          </p>
+          <ul className="mt-2.5 space-y-2.5">
+            {reasonCode.requirements.map((req) => (
+              <li key={req.id} className="grid grid-cols-[10px_1fr] gap-2 text-sm leading-6 text-slate-600">
+                <span className="text-slate-400">•</span>
+                <span>{req.label}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       </header>
 
       {reasonCode.match.type === "exception" && (
@@ -255,23 +325,12 @@ export function WorkupPane({
               {metRequirements}/{applicableRequirements.length} applicable requirements met
             </span>
           </div>
-          {disagreement && (
-            <p className="mt-2 text-xs text-amber-700">
-              Model proposed <ActionBadge action={workup.proposedAction} />; deterministic rules selected the
-              recommendation above.
-            </p>
-          )}
         </section>
 
         <section>
-          <div className="flex items-center justify-between">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              Requirements
-            </h2>
-            <span className="text-xs text-slate-500">
-              {metRequirements} of {applicableRequirements.length} met
-            </span>
-          </div>
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Requirements
+          </h2>
           <div className="mt-2 border-y border-slate-200">
             {workup.requirements.map((req) => (
               <RequirementRow
@@ -301,37 +360,6 @@ export function WorkupPane({
           </section>
         )}
 
-        <section>
-          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-            Why this decision
-          </h2>
-          <ul className="mt-2 space-y-2 text-sm leading-5 text-slate-700">
-            {decisionBullets(workup.rationale).map((reason, index) => (
-              <li key={index} className="grid grid-cols-[14px_1fr] gap-1.5">
-                <span className="text-slate-400">•</span>
-                <span>{reason}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <details className="border-t border-slate-200 pt-3 text-xs">
-          <summary className="cursor-pointer font-medium text-slate-500">Transaction signals</summary>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Chip label="AVS" value={raw.transaction.avs_result ?? "n/a"} />
-            <Chip label="CVV" value={raw.transaction.cvv_result ?? "n/a"} />
-            <Chip label="3DS" value={raw.transaction.three_ds_status} />
-            <Chip
-              label="Billing vs shipping"
-              value={
-                billingShippingMismatch
-                  ? `${raw.transaction.billing_address_postcode} ≠ ${raw.transaction.shipping_address_postcode}`
-                  : "match"
-              }
-              warn={billingShippingMismatch}
-            />
-          </div>
-        </details>
       </main>
 
       <section className="mt-auto space-y-3 border-t border-slate-200 bg-white px-5 py-4">
@@ -358,8 +386,8 @@ export function WorkupPane({
         <label className="block text-xs font-medium text-slate-600">
           Rationale
           <textarea
-            className="mt-1 block min-h-36 w-full rounded border border-slate-300 px-3 py-2 text-sm leading-5 text-slate-800"
-            rows={7}
+            className="mt-1 block min-h-52 w-full resize-y rounded border border-slate-300 px-3 py-2 text-sm leading-6 text-slate-800"
+            rows={14}
             value={rationale}
             onChange={(e) => setRationale(e.target.value)}
           />

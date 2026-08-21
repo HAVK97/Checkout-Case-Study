@@ -12,7 +12,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
     "@llamaindex/liteparse": "^2.13.1",
-    "@llamaindex/llama-cloud": "^2.14.0",
     "@tailwindcss/postcss": "^4.3.3",
     "next": "^16.3.1",
     "pdfjs-dist": "^6.2.108",
