@@ -66,6 +66,26 @@ export default function UploadPage() {
   const [casesFile, setCasesFile] = useState<File | null>(null);
   const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
 
+  const startBatch = async (init?: RequestInit) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/batches", { method: "POST", ...init });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? "Failed to start batch");
+      }
+      const data: Batch = await res.json();
+      setBatch(data);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLoadSample = () => startBatch();
+
   const handleUpload = async () => {
     if (!casesFile) {
       setError("Select a cases file");
@@ -76,27 +96,12 @@ export default function UploadPage() {
       return;
     }
 
-    setLoading(true);
-    setError(null);
-    try {
-      const fd = new FormData();
-      fd.append("cases", casesFile);
-      for (const f of evidenceFiles) {
-        fd.append("evidence", f);
-      }
-
-      const res = await fetch("/api/batches", { method: "POST", body: fd });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? "Upload failed");
-      }
-      const data: Batch = await res.json();
-      setBatch(data);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
+    const fd = new FormData();
+    fd.append("cases", casesFile);
+    for (const f of evidenceFiles) {
+      fd.append("evidence", f);
     }
+    await startBatch({ body: fd });
   };
 
   const missingCount = batch
@@ -140,7 +145,37 @@ export default function UploadPage() {
               </p>
             </div>
 
-            <div className="mt-8 rounded-xl border border-slate-200/80 bg-white p-6 shadow-sm">
+            <button
+              type="button"
+              onClick={handleLoadSample}
+              disabled={loading}
+              className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-medium text-indigo-800 transition-colors hover:bg-indigo-100 disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Loading sample dataset…
+                </>
+              ) : (
+                "Load sample dataset (10 cases)"
+              )}
+            </button>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center" aria-hidden="true">
+                <div className="w-full border-t border-slate-200" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase tracking-wide">
+                <span className="bg-gradient-to-b from-slate-50 to-slate-100/80 px-2 text-slate-400">
+                  or upload your own
+                </span>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200/80 bg-white p-6 shadow-sm">
               <div className="space-y-5">
                 <FileDropZone
                   accept=".json,application/json"
@@ -179,7 +214,7 @@ export default function UploadPage() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    Uploading…
+                    Loading…
                   </>
                 ) : (
                   "Continue"

@@ -30,15 +30,13 @@ Then start the single-process demo:
 npm run dev
 ```
 
-Open [http://localhost:3000/upload](http://localhost:3000/upload), upload a
-cases JSON file and the matching merchant evidence files, review the filename
+Open [http://localhost:3000/upload](http://localhost:3000/upload) and click
+**Load sample dataset (10 cases)** to run the included demo batch, or upload
+your own cases JSON and matching merchant evidence files. Review the filename
 mapping, then start reviewing. The first run parses cases in the background;
 parsed files and batch state are cached under `.cache/`.
 
-For local testing, use the included dataset:
-
-- Cases: `data/cases.json`
-- Evidence: all files in `data/Merchant Evidence Files/`
+The sample batch uses `data/cases.json` and `data/Merchant Evidence Files/`.
 
 ## Governance model
 
