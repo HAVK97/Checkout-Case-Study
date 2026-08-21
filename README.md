@@ -4,6 +4,10 @@ Analyst-ready chargeback representment workups with deterministic scheme
 checklists, Claude analysis, verified source citations, and PDF/image
 highlighting.
 
+## Demo
+
+[Watch the demo video](https://www.loom.com/share/ad42f216f27a499fbb32970c18ccfc3d)
+
 ## Run locally
 
 Requirements: Node.js 20+ and an Anthropic API key.
