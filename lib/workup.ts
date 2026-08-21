@@ -48,8 +48,14 @@ const SUBMIT_WORKUP_SCHEMA = {
                   description:
                     "For text_quote: a short VERBATIM quote copied from the parsed evidence. For visual_observation: a concise literal description of what is visible, including limitations.",
                 },
+                regionIds: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "For text_quote: the exact [region-id] labels containing the quote. For visual_observation: an empty array.",
+                },
               },
-              required: ["file", "page", "evidenceKind", "quote"],
+              required: ["file", "page", "evidenceKind", "quote", "regionIds"],
             },
           },
           gap: {
@@ -62,7 +68,8 @@ const SUBMIT_WORKUP_SCHEMA = {
     },
     rationale: {
       type: "string",
-      description: "3-5 sentences: the overall case for or against representment, referencing which requirements were/weren't met.",
+      description:
+        "3-5 short, standalone factual sentences explaining the decision. Each sentence must state one material fact, requirement gap, or direct consequence. No introductions, repetition, generic commentary, or filler.",
     },
     proposedAction: {
       type: "string",
@@ -83,12 +90,13 @@ You are given ONE chargeback case: the scheme reason code, the issuer's narrativ
 
 Rules you must follow exactly:
 1. For every requirement listed, decide "satisfied", "partial", or "missing" based ONLY on the evidence text given below. Never invent facts, dates, names, or numbers that are not present in the evidence.
-2. For claims supported by words, use evidenceKind "text_quote". Its quote MUST be copied character-for-character from the parsed evidence text. Do not repair OCR inside the quote. If no exact quote supports the claim, omit that text citation.
-3. For non-text facts directly visible in an attached image, use evidenceKind "visual_observation", set page to null, and describe only what is literally visible. State material limitations (for example, "front view only; structural damage cannot be assessed"). Never use visual_observation for text that is available in the parsed OCR.
-4. Use the exact file name from the evidence header/image label. A visual observation may support a requirement, but it must never infer hidden condition, identity, ownership, dates, or events that the pixels do not establish.
-5. "rationale" is 3-5 sentences summarizing the overall case.
-6. "proposedAction" is your own recommendation: "represent" (evidence supports fighting the chargeback), "accept_liability" (evidence doesn't support representment, or this reason code cannot be represented), or "request_more_evidence" (evidence is close but has a specific, fixable gap).
-7. If "proposedAction" is "request_more_evidence", "askMerchant" MUST list the exact document(s) or fact(s) still needed. Otherwise "askMerchant" should be an empty array.`;
+2. For claims supported by words, use evidenceKind "text_quote". Its quote MUST be copied character-for-character from the text after a [region-id], and regionIds MUST contain the corresponding id(s). Do not include the [region-id] label in the quote. Do not repair OCR inside the quote. If no exact region supports the claim, omit that text citation.
+3. Cite the smallest complete semantic region. For tables, cite a table-row region, never an individual cell. For prose spanning wrapped lines, include every consecutive line region containing the quote.
+4. For non-text facts directly visible in an attached image, use evidenceKind "visual_observation", set page to null, set regionIds to [], and describe only what is literally visible. State material limitations (for example, "front view only; structural damage cannot be assessed"). Never use visual_observation for text that is available in the parsed OCR.
+5. Use the exact file name from the evidence header/image label. A visual observation may support a requirement, but it must never infer hidden condition, identity, ownership, dates, or events that the pixels do not establish.
+6. "rationale" is 3-5 short, standalone factual sentences that fully explain the decision. Every sentence must add a material fact, requirement gap, or direct consequence. Omit introductions, repetition, generic statements, and filler. Use concrete names, dates, amounts, and mismatches where relevant.
+7. "proposedAction" is your own recommendation: "represent" (evidence supports fighting the chargeback), "accept_liability" (evidence doesn't support representment, or this reason code cannot be represented), or "request_more_evidence" (evidence is close but has a specific, fixable gap).
+8. If "proposedAction" is "request_more_evidence", "askMerchant" MUST list the exact document(s) or fact(s) still needed. Otherwise "askMerchant" should be an empty array.`;
 
 function buildEvidenceBlock(doc: ParsedDoc): string {
   const mode =
@@ -105,7 +113,13 @@ function buildEvidenceBlock(doc: ParsedDoc): string {
     }. Treat any claim about its contents as unverifiable; do not cite it.)`;
   }
   const pages = doc.pages
-    .map((p) => `--- page ${p.pageNumber} ---\n${p.text || "(blank page)"}`)
+    .map((p) => {
+      const regions = p.regions
+        .filter((region) => region.kind === "table_row" || region.kind === "line")
+        .map((region) => `[${region.id}] ${region.text}`)
+        .join("\n");
+      return `--- page ${p.pageNumber} ---\n${regions || "(blank page)"}`;
+    })
     .join("\n\n");
   return `### ${doc.file}${mode}\n${pages}`;
 }
@@ -242,6 +256,9 @@ function normalizeDraft(input: Record<string, unknown>, requirementIds: string[]
             file: typeof c.file === "string" ? c.file : "",
             page: typeof c.page === "number" ? c.page : null,
             quote: typeof c.quote === "string" ? c.quote : "",
+            regionIds: Array.isArray(c.regionIds)
+              ? c.regionIds.filter((id): id is string => typeof id === "string")
+              : [],
             evidenceKind:
               c.evidenceKind === "visual_observation"
                 ? ("visual_observation" as const)

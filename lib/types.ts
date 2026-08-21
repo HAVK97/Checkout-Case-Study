@@ -61,9 +61,12 @@ export interface Rect {
   h: number;
 }
 
-export interface ParsedLine {
+export interface ParsedRegion {
+  id: string;
+  kind: "line" | "paragraph" | "table_row" | "table_cell";
   text: string;
   rect: Rect;
+  parentId?: string;
 }
 
 export interface ParsedPage {
@@ -71,7 +74,7 @@ export interface ParsedPage {
   width: number; // PDF points (or image pixel width for images)
   height: number;
   text: string; // full page text/markdown, used as LLM context
-  lines: ParsedLine[]; // used by the cite resolver
+  regions: ParsedRegion[]; // canonical LiteParse text + geometry used for citations
 }
 
 export type ParseSource = "llamaparse" | "liteparse" | "none";
@@ -91,10 +94,13 @@ export interface Citation {
   file: string;
   page: number | null; // null for images with no resolvable page
   quote: string;
+  regionIds: string[];
   rects: Rect[];
-  verified: boolean;
+  verified: boolean; // backwards-compatible alias for textVerified
+  textVerified: boolean;
+  locationResolved: boolean;
   evidenceKind: "text_quote" | "visual_observation";
-  highlightUnit: "line" | "visual_only" | "unresolved";
+  highlightUnit: "line" | "paragraph" | "table_row" | "visual_only" | "unresolved";
   sourceWidth?: number;
   sourceHeight?: number;
 }
@@ -125,6 +131,7 @@ export interface WorkupDraftCitation {
   file: string;
   page: number | null;
   quote: string;
+  regionIds: string[];
   evidenceKind: "text_quote" | "visual_observation";
 }
 

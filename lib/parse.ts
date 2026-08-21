@@ -7,7 +7,7 @@ import type {
   ParsedPage as LiteParsedPage,
   Rect as LiteRect,
 } from "@llamaindex/liteparse";
-import type { ParsedDoc, ParsedLine, ParsedPage, Rect } from "./types";
+import type { ParsedDoc, ParsedPage, ParsedRegion, Rect } from "./types";
 
 // Citation/highlight resolution always goes through LiteParse: it runs
 // locally (no API key), and its typed `blocks` (table cells with real text +
@@ -19,7 +19,7 @@ import type { ParsedDoc, ParsedLine, ParsedPage, Rect } from "./types";
 // works identically with or without a LlamaCloud key.
 
 const PARSE_CACHE_DIR = path.join(process.cwd(), ".cache", "parse");
-const PARSE_CACHE_VERSION = "v3-image-mode";
+const PARSE_CACHE_VERSION = "v4-canonical-regions";
 
 function ensureCacheDir(): void {
   fs.mkdirSync(PARSE_CACHE_DIR, { recursive: true });
@@ -106,7 +106,7 @@ async function parseWithLiteParse(
       width: page.width,
       height: page.height,
       text: page.markdown || page.text,
-      lines: buildLinesForPage(page),
+      regions: buildRegionsForPage(page),
     }));
     return {
       file: basename,
@@ -127,7 +127,9 @@ async function parseWithLiteParse(
 }
 
 function classifyImageMode(pages: ParsedPage[]): "text" | "visual" | "mixed" {
-  const lines = pages.flatMap((page) => page.lines).filter((line) => /[\p{L}\p{N}]/u.test(line.text));
+  const lines = pages
+    .flatMap((page) => page.regions)
+    .filter((region) => region.kind === "line" && /[\p{L}\p{N}]/u.test(region.text));
   const characterCount = lines.reduce(
     (total, line) => total + line.text.replace(/\s+/g, "").length,
     0
@@ -153,19 +155,28 @@ function unionRect(rects: Rect[]): Rect {
 // Table rows/cells: real structured text + bbox from `extractBlocks`. This is
 // the grounding used for CB-2025-0007 (delivery row on page 8 of a 10-page
 // manifest) and similar tabular evidence (tracking events, 3DS/AVS records).
-function buildLinesForPage(page: LiteParsedPage): ParsedLine[] {
-  const lines: ParsedLine[] = [];
+function buildRegionsForPage(page: LiteParsedPage): ParsedRegion[] {
+  const regions: ParsedRegion[] = [];
+  let tableIndex = 0;
 
   for (const block of page.blocks ?? []) {
     if (block.kind !== "table") continue;
 
     const allRows = [...(block.header ? [block.header] : []), ...(block.rows ?? [])];
-    for (const row of allRows) {
+    for (const [rowIndex, row] of allRows.entries()) {
       const cellRects: Rect[] = [];
-      for (const cell of row) {
+      const rowId = `p${page.pageNum}-table${tableIndex}-row${rowIndex}`;
+      const cells: ParsedRegion[] = [];
+      for (const [cellIndex, cell] of row.entries()) {
         if (cell?.bbox && cell.text.trim()) {
           const rect = toRect(cell.bbox);
-          lines.push({ text: cell.text, rect });
+          cells.push({
+            id: `${rowId}-cell${cellIndex}`,
+            kind: "table_cell",
+            text: cell.text,
+            rect,
+            parentId: rowId,
+          });
           cellRects.push(rect);
         }
       }
@@ -177,23 +188,49 @@ function buildLinesForPage(page: LiteParsedPage): ParsedLine[] {
         .replace(/\s+/g, " ")
         .trim();
       if (rowText && cellRects.length > 0) {
-        lines.push({ text: rowText, rect: unionRect(cellRects) });
+        // Put the semantic row before its cells so quote fallback prefers the
+        // complete row rather than highlighting one isolated cell.
+        regions.push({
+          id: rowId,
+          kind: "table_row",
+          text: rowText,
+          rect: unionRect(cellRects),
+        });
+        regions.push(...cells);
       }
     }
+    tableIndex += 1;
   }
 
   // Everything else (KV letters, paragraphs, headings): group raw text items
-  // into visual lines by y-coordinate for line-level highlight granularity.
-  lines.push(...groupTextItemsIntoLines(page.textItems ?? []));
+  // into visual lines by y-coordinate. LiteParse also emits textItems for
+  // table content; exclude those duplicates so the table row remains the
+  // only semantic citation target for that content.
+  const tableRows = regions.filter((region) => region.kind === "table_row");
+  const proseLines = groupTextItemsIntoLines(page.textItems ?? [], page.pageNum).filter(
+    (line) => !tableRows.some((row) => rectContainsCenter(row.rect, line.rect))
+  );
+  regions.push(...proseLines);
 
-  return lines;
+  return regions;
 }
 
 const LINE_Y_TOLERANCE = 3;
 
-function groupTextItemsIntoLines(items: LiteTextItem[]): ParsedLine[] {
+function rectContainsCenter(container: Rect, candidate: Rect): boolean {
+  const centerX = candidate.x + candidate.w / 2;
+  const centerY = candidate.y + candidate.h / 2;
+  return (
+    centerX >= container.x &&
+    centerX <= container.x + container.w &&
+    centerY >= container.y &&
+    centerY <= container.y + container.h
+  );
+}
+
+function groupTextItemsIntoLines(items: LiteTextItem[], pageNumber: number): ParsedRegion[] {
   const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
-  const lines: ParsedLine[] = [];
+  const lines: ParsedRegion[] = [];
 
   for (const item of sorted) {
     if (!item.text.trim()) continue;
@@ -207,6 +244,8 @@ function groupTextItemsIntoLines(items: LiteTextItem[]): ParsedLine[] {
       last.rect.h = Math.max(last.rect.h, bottom - last.rect.y);
     } else {
       lines.push({
+        id: `p${pageNumber}-line${lines.length}`,
+        kind: "line",
         text: item.text,
         rect: { x: item.x, y: item.y, w: item.width, h: item.height },
       });

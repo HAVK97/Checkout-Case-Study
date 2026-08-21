@@ -5,17 +5,17 @@ import { getReasonCode } from "@/lib/rules";
 import type { Action, CaseRecord, Citation, Rect, RequirementResult } from "@/lib/types";
 
 const STATUS_STYLE: Record<string, string> = {
-  satisfied: "border-emerald-200 bg-emerald-50",
-  partial: "border-amber-200 bg-amber-50",
-  missing: "border-rose-200 bg-rose-50",
-  "n/a": "border-slate-200 bg-slate-50",
+  satisfied: "text-emerald-700",
+  partial: "text-amber-700",
+  missing: "text-rose-700",
+  "n/a": "text-slate-400",
 };
 
-const STATUS_BADGE: Record<string, string> = {
-  satisfied: "bg-emerald-600 text-white",
-  partial: "bg-amber-500 text-white",
-  missing: "bg-rose-600 text-white",
-  "n/a": "bg-slate-400 text-white",
+const STATUS_ICON: Record<string, string> = {
+  satisfied: "✓",
+  partial: "◐",
+  missing: "×",
+  "n/a": "—",
 };
 
 const ACTION_OPTIONS: { value: Action; label: string }[] = [
@@ -29,10 +29,6 @@ const ACTION_TEXT_STYLE: Record<Action, string> = {
   accept_liability: "text-rose-700",
   request_more_evidence: "text-amber-700",
 };
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n)}…` : s;
-}
 
 function ActionBadge({ action }: { action: Action }) {
   return <span className={`font-semibold ${ACTION_TEXT_STYLE[action]}`}>{action.replace(/_/g, " ")}</span>;
@@ -50,58 +46,102 @@ function Chip({ label, value, warn }: { label: string; value: string; warn?: boo
   );
 }
 
+function citationSourceKey(citation: Citation): string {
+  const target =
+    citation.regionIds?.length > 0
+      ? [...citation.regionIds].sort().join(",")
+      : citation.quote.trim().toLowerCase();
+  return `${citation.file}:${citation.page ?? ""}:${target}`;
+}
+
+function decisionBullets(rationale: string): string[] {
+  const lines = rationale
+    .split(/\n+/)
+    .map((line) => line.replace(/^[\s•*-]+/, "").trim())
+    .filter(Boolean);
+  if (lines.length > 1) return lines;
+
+  return rationale
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9])/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
 function RequirementRow({
   req,
+  sourceNumbers,
+  sourceRects,
   onSelectCitation,
 }: {
   req: RequirementResult;
+  sourceNumbers: Map<string, number>;
+  sourceRects: Map<string, Rect[]>;
   onSelectCitation: (
     file: string,
     page: number | null,
     rects: Rect[],
     sourceWidth?: number,
-    evidenceKind?: Citation["evidenceKind"]
+    evidenceKind?: Citation["evidenceKind"],
+    quote?: string,
+    textVerified?: boolean,
+    locationResolved?: boolean,
+    highlightUnit?: Citation["highlightUnit"]
   ) => void;
 }) {
+  const seen = new Set<number>();
   return (
-    <div className={`rounded border px-3 py-2 ${STATUS_STYLE[req.status]}`}>
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-sm text-slate-800">{req.label}</span>
-        <span
-          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${STATUS_BADGE[req.status]}`}
-        >
-          {req.status}
+    <div className="border-b border-slate-100 py-3 last:border-b-0">
+      <div className="grid grid-cols-[20px_1fr_auto] items-start gap-2">
+        <span className={`text-base font-semibold leading-5 ${STATUS_STYLE[req.status]}`} aria-hidden="true">
+          {STATUS_ICON[req.status]}
         </span>
-      </div>
-      {req.gap && <p className="mt-1 text-xs text-slate-600">{req.gap}</p>}
-      {req.citations.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {req.citations.map((c, i) => (
-            <button
-              key={i}
-              onClick={() =>
-                onSelectCitation(c.file, c.page, c.rects, c.sourceWidth, c.evidenceKind)
-              }
-              title={c.quote}
-              className={`rounded border px-2 py-1 text-left text-[11px] transition ${
-                c.evidenceKind === "visual_observation"
-                  ? "border-violet-300 bg-violet-50 text-violet-800 hover:bg-violet-100"
-                  : c.verified
-                  ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  : "border-dashed border-slate-300 bg-white/60 text-slate-400 hover:bg-white"
-              }`}
-            >
-              {c.evidenceKind === "visual_observation"
-                ? "◉ AI vision"
-                : c.verified
-                  ? "✓ OCR"
-                  : "⚠ Unverified"}{" "}
-              · {c.file}
-              {c.page != null ? ` p.${c.page}` : ""} — &ldquo;{truncate(c.quote, 40)}&rdquo;
-            </button>
-          ))}
+        <div>
+          <div className="text-sm font-medium leading-5 text-slate-800">{req.label}</div>
+          {req.gap && <p className="mt-1 text-xs leading-5 text-slate-600">{req.gap}</p>}
         </div>
-      )}
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[10px] font-semibold uppercase tracking-wide ${STATUS_STYLE[req.status]}`}>
+            {req.status === "satisfied" ? "Met" : req.status}
+          </span>
+          {req.citations.map((citation, index) => {
+            const key = citationSourceKey(citation);
+            const sourceNumber = sourceNumbers.get(key) ?? index + 1;
+            if (seen.has(sourceNumber)) return null;
+            seen.add(sourceNumber);
+            const mergedRects = sourceRects.get(key) ?? citation.rects;
+            const textVerified = citation.textVerified ?? citation.verified;
+            const locationResolved = mergedRects.length > 0;
+            return (
+              <button
+                key={`${citation.file}:${citation.page}:${index}`}
+                onClick={() =>
+                  onSelectCitation(
+                    citation.file,
+                    citation.page,
+                    mergedRects,
+                    citation.sourceWidth,
+                    citation.evidenceKind,
+                    citation.quote,
+                    textVerified,
+                    locationResolved,
+                    citation.highlightUnit
+                  )
+                }
+                title={`${citation.file}${citation.page != null ? `, page ${citation.page}` : ""}`}
+                aria-label={`Open source ${sourceNumber}: ${citation.file}`}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
+                  citation.verified || citation.evidenceKind === "visual_observation"
+                    ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    : "border border-dashed border-slate-300 text-slate-400 hover:bg-slate-50"
+                }`}
+              >
+                [{sourceNumber}
+                {!locationResolved ? (textVerified ? " page" : " ?") : ""}]
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -117,7 +157,11 @@ export function WorkupPane({
     page: number | null,
     rects: Rect[],
     sourceWidth?: number,
-    evidenceKind?: Citation["evidenceKind"]
+    evidenceKind?: Citation["evidenceKind"],
+    quote?: string,
+    textVerified?: boolean,
+    locationResolved?: boolean,
+    highlightUnit?: Citation["highlightUnit"]
   ) => void;
   onConfirm: (action: Action, rationale: string) => Promise<void>;
 }) {
@@ -149,6 +193,29 @@ export function WorkupPane({
     raw.transaction.shipping_address_postcode != null &&
     raw.transaction.shipping_address_postcode !== raw.transaction.billing_address_postcode;
   const disagreement = workup.proposedAction !== workup.ruleAction;
+  const applicableRequirements = workup.requirements.filter((req) => req.status !== "n/a");
+  const metRequirements = applicableRequirements.filter((req) => req.status === "satisfied").length;
+  const sourceNumbers = new Map<string, number>();
+  const sourceRects = new Map<string, Rect[]>();
+  const sources: Citation[] = [];
+
+  for (const requirement of workup.requirements) {
+    for (const citation of requirement.citations) {
+      const key = citationSourceKey(citation);
+      if (!sourceNumbers.has(key)) {
+        sourceNumbers.set(key, sources.length + 1);
+        sourceRects.set(key, [...citation.rects]);
+        sources.push(citation);
+      } else {
+        const existing = sourceRects.get(key)!;
+        for (const r of citation.rects) {
+          if (!existing.some((e) => e.x === r.x && e.y === r.y && e.w === r.w && e.h === r.h)) {
+            existing.push(r);
+          }
+        }
+      }
+    }
+  }
 
   const handleConfirmClick = async () => {
     setSaving(true);
@@ -163,59 +230,116 @@ export function WorkupPane({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-white">
-      <div className="border-b border-slate-200 px-4 py-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-white">
+      <header className="border-b border-slate-200 px-5 py-4">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
           {raw.scheme.toUpperCase()} {raw.reason_code} · {reasonCode.label}
         </div>
-        <p className="mt-1 text-sm text-slate-700">{workup.reasonSummary}</p>
-      </div>
+        <p className="mt-2 text-sm leading-6 text-slate-600">{workup.reasonSummary}</p>
+      </header>
 
       {reasonCode.match.type === "exception" && (
-        <div className="mx-4 mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <div className="mx-5 mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           <strong>Exception reason code.</strong> {reasonCode.exceptionNote}
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2 px-4 py-3 text-xs">
-        <Chip label="AVS" value={raw.transaction.avs_result ?? "n/a"} />
-        <Chip label="CVV" value={raw.transaction.cvv_result ?? "n/a"} />
-        <Chip label="3DS" value={raw.transaction.three_ds_status} />
-        <Chip
-          label="Billing vs shipping"
-          value={
-            billingShippingMismatch
-              ? `${raw.transaction.billing_address_postcode} ≠ ${raw.transaction.shipping_address_postcode}`
-              : "match"
-          }
-          warn={billingShippingMismatch}
-        />
-      </div>
-
-      <div className="px-4 py-2">
-        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Compelling evidence checklist
-        </div>
-        <div className="space-y-2">
-          {workup.requirements.map((req) => (
-            <RequirementRow key={req.id} req={req} onSelectCitation={onSelectCitation} />
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-auto space-y-3 border-t border-slate-200 px-4 py-3">
-        <p className="text-sm text-slate-700">{workup.rationale}</p>
-
-        <div className="text-sm">
-          <span className="font-medium text-slate-600">Rule-checked action: </span>
-          <ActionBadge action={workup.ruleAction} />
-          {disagreement && (
-            <span className="ml-2 text-xs text-amber-700">
-              (model proposed <ActionBadge action={workup.proposedAction} />)
+      <main className="space-y-6 px-5 py-5">
+        <section className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            Recommendation
+          </div>
+          <div className="mt-1 flex items-end justify-between gap-3">
+            <ActionBadge action={workup.ruleAction} />
+            <span className="text-xs text-slate-500">
+              {metRequirements}/{applicableRequirements.length} applicable requirements met
             </span>
+          </div>
+          {disagreement && (
+            <p className="mt-2 text-xs text-amber-700">
+              Model proposed <ActionBadge action={workup.proposedAction} />; deterministic rules selected the
+              recommendation above.
+            </p>
           )}
-        </div>
+        </section>
 
+        <section>
+          <div className="flex items-center justify-between">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              Requirements
+            </h2>
+            <span className="text-xs text-slate-500">
+              {metRequirements} of {applicableRequirements.length} met
+            </span>
+          </div>
+          <div className="mt-2 border-y border-slate-200">
+            {workup.requirements.map((req) => (
+              <RequirementRow
+                key={req.id}
+                req={req}
+                sourceNumbers={sourceNumbers}
+                sourceRects={sourceRects}
+                onSelectCitation={onSelectCitation}
+              />
+            ))}
+          </div>
+        </section>
+
+        {workup.askMerchant.length > 0 && (
+          <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-amber-700">
+              Ask merchant for
+            </h2>
+            <ul className="mt-2 space-y-2 text-sm leading-5 text-slate-700">
+              {workup.askMerchant.map((item, index) => (
+                <li key={index} className="grid grid-cols-[18px_1fr] gap-1">
+                  <span className="text-amber-600">•</span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <section>
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Why this decision
+          </h2>
+          <ul className="mt-2 space-y-2 text-sm leading-5 text-slate-700">
+            {decisionBullets(workup.rationale).map((reason, index) => (
+              <li key={index} className="grid grid-cols-[14px_1fr] gap-1.5">
+                <span className="text-slate-400">•</span>
+                <span>{reason}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <details className="border-t border-slate-200 pt-3 text-xs">
+          <summary className="cursor-pointer font-medium text-slate-500">Transaction signals</summary>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Chip label="AVS" value={raw.transaction.avs_result ?? "n/a"} />
+            <Chip label="CVV" value={raw.transaction.cvv_result ?? "n/a"} />
+            <Chip label="3DS" value={raw.transaction.three_ds_status} />
+            <Chip
+              label="Billing vs shipping"
+              value={
+                billingShippingMismatch
+                  ? `${raw.transaction.billing_address_postcode} ≠ ${raw.transaction.shipping_address_postcode}`
+                  : "match"
+              }
+              warn={billingShippingMismatch}
+            />
+          </div>
+        </details>
+      </main>
+
+      <section className="mt-auto space-y-3 border-t border-slate-200 bg-white px-5 py-4">
+        <div>
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Analyst decision
+          </h2>
+        </div>
         <label className="block text-xs font-medium text-slate-600">
           Analyst action
           <select
@@ -234,23 +358,12 @@ export function WorkupPane({
         <label className="block text-xs font-medium text-slate-600">
           Rationale
           <textarea
-            className="mt-1 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm text-slate-800"
-            rows={3}
+            className="mt-1 block min-h-36 w-full rounded border border-slate-300 px-3 py-2 text-sm leading-5 text-slate-800"
+            rows={7}
             value={rationale}
             onChange={(e) => setRationale(e.target.value)}
           />
         </label>
-
-        {workup.askMerchant.length > 0 && (
-          <div className="text-xs">
-            <div className="font-medium text-slate-600">Ask merchant for:</div>
-            <ul className="ml-4 list-disc text-slate-600">
-              {workup.askMerchant.map((item, i) => (
-                <li key={i}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        )}
 
         {saveError && <div className="text-xs text-rose-600">{saveError}</div>}
 
@@ -261,7 +374,7 @@ export function WorkupPane({
         >
           {saving ? "Saving…" : caseRecord.status === "reviewed" ? "Update review" : "Confirm"}
         </button>
-      </div>
+      </section>
     </div>
   );
 }

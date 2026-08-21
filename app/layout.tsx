@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Representment Workup",
-  description: "Analyst-ready chargeback representment workups",
+  title: "Chargeback Review",
+  description: "Upload dispute cases and merchant evidence for analyst review",
 };
 
 export default function RootLayout({

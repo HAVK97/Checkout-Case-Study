@@ -3,6 +3,7 @@ import type {
   Citation,
   ParsedDoc,
   ParsedPage,
+  ParsedRegion,
   ReasonCodeDef,
   Rect,
   RequirementResult,
@@ -17,6 +18,7 @@ import type {
 
 function normalize(text: string): string {
   return text
+    .replace(/<[^>]+>/g, " ")
     .replace(/[*_#`~]/g, "")
     .replace(/\s+/g, " ")
     .trim()
@@ -25,32 +27,109 @@ function normalize(text: string): string {
 
 interface QuoteMatch {
   page: number | null;
+  regionIds: string[];
   rects: Rect[];
   highlightUnit: Citation["highlightUnit"];
 }
 
-function findQuoteOnPage(needle: string, page: ParsedPage): QuoteMatch | null {
-  const haystack = normalize(page.text);
-  if (!needle || !haystack.includes(needle)) return null;
+function matchesQuote(needle: string, text: string): boolean {
+  const candidate = normalize(text);
+  return candidate.length > 0 && (candidate.includes(needle) || needle.includes(candidate));
+}
 
-  for (const line of page.lines) {
-    const lineNorm = normalize(line.text);
-    if (lineNorm && (lineNorm.includes(needle) || needle.includes(lineNorm))) {
-      return { page: page.pageNumber, rects: [line.rect], highlightUnit: "line" };
+function uniqueRegions(regions: ParsedRegion[]): ParsedRegion[] {
+  return [...new Map(regions.map((region) => [region.id, region])).values()];
+}
+
+function promoteTableCells(regions: ParsedRegion[], page: ParsedPage): ParsedRegion[] {
+  const byId = new Map(page.regions.map((region) => [region.id, region]));
+  return uniqueRegions(
+    regions.map((region) =>
+      region.kind === "table_cell" && region.parentId ? (byId.get(region.parentId) ?? region) : region
+    )
+  );
+}
+
+function resolveRegionIds(
+  needle: string,
+  regionIds: string[],
+  doc: ParsedDoc,
+  preferredPage: number | null
+): QuoteMatch | null {
+  if (regionIds.length === 0) return null;
+
+  for (const page of doc.pages) {
+    if (preferredPage != null && page.pageNumber !== preferredPage) continue;
+    const byId = new Map(page.regions.map((region) => [region.id, region]));
+    const selected = regionIds.map((id) => byId.get(id)).filter((region): region is ParsedRegion => !!region);
+    if (selected.length !== regionIds.length) continue;
+
+    const promoted = promoteTableCells(selected, page);
+    if (!matchesQuote(needle, selected.map((region) => region.text).join(" "))) continue;
+
+    const isTableRow = promoted.some((region) => region.kind === "table_row");
+    return {
+      page: page.pageNumber,
+      regionIds: promoted.map((region) => region.id),
+      rects: promoted.map((region) => region.rect),
+      highlightUnit: isTableRow ? "table_row" : promoted.length > 1 ? "paragraph" : "line",
+    };
+  }
+  return null;
+}
+
+function matchRegions(needle: string, page: ParsedPage): QuoteMatch | null {
+  // A table row is the semantic evidence unit. Check it before cells so a
+  // matching value highlights its complete row and surrounding context.
+  for (const row of page.regions.filter((region) => region.kind === "table_row")) {
+    if (matchesQuote(needle, row.text)) {
+      return {
+        page: page.pageNumber,
+        regionIds: [row.id],
+        rects: [row.rect],
+        highlightUnit: "table_row",
+      };
     }
   }
 
-  // Quote may span several grouped lines (e.g. a wrapped sentence). Union
-  // every line whose text is fully contained in the quote.
-  const covering = page.lines.filter((l) => {
-    const n = normalize(l.text);
-    return n.length > 0 && needle.includes(n);
-  });
-  if (covering.length > 0) {
-    return { page: page.pageNumber, rects: covering.map((l) => l.rect), highlightUnit: "line" };
+  // Wrapped prose often spans several visual lines. Find the smallest
+  // contiguous window that contains the quote.
+  const prose = page.regions.filter(
+    (region) => region.kind === "line" || region.kind === "paragraph"
+  );
+  for (let size = 1; size <= Math.min(5, prose.length); size += 1) {
+    for (let start = 0; start + size <= prose.length; start += 1) {
+      const window = prose.slice(start, start + size);
+      if (!matchesQuote(needle, window.map((region) => region.text).join(" "))) continue;
+      return {
+        page: page.pageNumber,
+        regionIds: window.map((region) => region.id),
+        rects: window.map((region) => region.rect),
+        highlightUnit: size > 1 ? "paragraph" : "line",
+      };
+    }
   }
 
-  return { page: page.pageNumber, rects: [], highlightUnit: "unresolved" };
+  return null;
+}
+
+function findQuoteOnPage(needle: string, page: ParsedPage): QuoteMatch | null {
+  if (!needle) return null;
+
+  // Tier 1: canonical LiteParse regions with exact geometry.
+  const regionMatch = matchRegions(needle, page);
+  if (regionMatch) return regionMatch;
+
+  // Tier 2: full page text with HTML stripped to spaces
+  const haystack = normalize(page.text);
+  if (!haystack.includes(needle)) return null;
+
+  return {
+    page: page.pageNumber,
+    regionIds: [],
+    rects: [],
+    highlightUnit: "unresolved",
+  };
 }
 
 function findQuoteInDoc(quote: string, doc: ParsedDoc, preferredPage: number | null): QuoteMatch | null {
@@ -77,6 +156,7 @@ function resolveCitation(
   file: string,
   page: number | null,
   quote: string,
+  regionIds: string[],
   evidenceKind: Citation["evidenceKind"],
   docsByFile: Map<string, ParsedDoc>
 ): Citation {
@@ -87,8 +167,11 @@ function resolveCitation(
       file,
       page,
       quote,
+      regionIds,
       rects: [],
       verified: false,
+      textVerified: false,
+      locationResolved: false,
       evidenceKind,
       highlightUnit: "unresolved",
     };
@@ -102,8 +185,11 @@ function resolveCitation(
       file,
       page: null,
       quote,
+      regionIds: [],
       rects: [],
       verified: isGroundedImage,
+      textVerified: isGroundedImage,
+      locationResolved: false,
       evidenceKind,
       highlightUnit: isGroundedImage ? "visual_only" : "unresolved",
       sourceWidth: sourcePage?.width,
@@ -119,21 +205,30 @@ function resolveCitation(
       file,
       page: null,
       quote,
+      regionIds,
       rects: [],
       verified: false,
+      textVerified: false,
+      locationResolved: false,
       evidenceKind,
       highlightUnit: "visual_only",
     };
   }
 
-  const match = findQuoteInDoc(quote, doc, page);
+  const needle = normalize(quote);
+  const match =
+    resolveRegionIds(needle, regionIds, doc, page) ??
+    findQuoteInDoc(quote, doc, page);
   if (!match) {
     return {
       file,
       page,
       quote,
+      regionIds,
       rects: [],
       verified: false,
+      textVerified: false,
+      locationResolved: false,
       evidenceKind,
       highlightUnit: "unresolved",
     };
@@ -144,8 +239,11 @@ function resolveCitation(
     file,
     page: match.page,
     quote,
+    regionIds: match.regionIds,
     rects: match.rects,
     verified: true,
+    textVerified: true,
+    locationResolved: match.rects.length > 0,
     evidenceKind,
     highlightUnit: match.highlightUnit,
     sourceWidth: sourcePage?.width,
@@ -171,7 +269,7 @@ export function resolveWorkup(
     }
 
     const citations = draftReq.citations.map((c) =>
-      resolveCitation(c.file, c.page, c.quote, c.evidenceKind, docsByFile)
+      resolveCitation(c.file, c.page, c.quote, c.regionIds, c.evidenceKind, docsByFile)
     );
     const hasVerifiedCitation = citations.some((c) => c.verified);
 

@@ -10,6 +10,10 @@ export interface SelectedCitation {
   rects: Rect[];
   sourceWidth?: number;
   evidenceKind?: Citation["evidenceKind"];
+  quote?: string;
+  textVerified?: boolean;
+  locationResolved?: boolean;
+  highlightUnit?: Citation["highlightUnit"];
 }
 
 const IMAGE_EXTENSION = /\.(png|jpe?g|gif|bmp|webp)$/i;
@@ -19,13 +23,19 @@ function fileUrl(batchId: string, file: string): string {
 }
 
 function HighlightOverlay({ rects, scale }: { rects: Rect[]; scale: number }) {
+  const padding = 3;
   return (
     <>
       {rects.map((r, i) => (
         <div
           key={i}
           className="highlight-rect"
-          style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale }}
+          style={{
+            left: Math.max(0, r.x * scale - padding),
+            top: Math.max(0, r.y * scale - padding),
+            width: r.w * scale + padding * 2,
+            height: r.h * scale + padding * 2,
+          }}
         />
       ))}
     </>
@@ -228,10 +238,14 @@ export function SourceViewer({
   citation: SelectedCitation | null;
 }) {
   const isImage = selectedFile ? IMAGE_EXTENSION.test(selectedFile) : false;
+  const selectedSource = citation?.file === selectedFile ? citation : null;
+  const locationResolved = selectedSource
+    ? (selectedSource.locationResolved ?? selectedSource.rects.length > 0)
+    : false;
 
   return (
-    <div className="flex h-full flex-col bg-slate-50">
-      <div className="flex flex-wrap gap-1 border-b border-slate-200 bg-white px-2 py-1.5">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-slate-50">
+      <div className="shrink-0 flex flex-wrap gap-1 border-b border-slate-200 bg-white px-2 py-1.5">
         {files.map((f) => (
           <button
             key={f}
@@ -253,15 +267,35 @@ export function SourceViewer({
           </span>
         ))}
       </div>
-      <div className="flex-1 overflow-auto p-4">
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-4">
         {!selectedFile && <div className="text-sm text-slate-400">No evidence file selected.</div>}
+        {selectedSource && !locationResolved && selectedSource.evidenceKind !== "visual_observation" && (
+          <div
+            className={`mb-3 rounded border px-3 py-2 text-xs ${
+              selectedSource.textVerified
+                ? "border-amber-200 bg-amber-50 text-amber-800"
+                : "border-slate-200 bg-white text-slate-600"
+            }`}
+          >
+            <span className="font-semibold">
+              {selectedSource.textVerified ? "Source verified on this page." : "Exact source not verified."}
+            </span>{" "}
+            {selectedSource.textVerified
+              ? "The parser could not recover a precise location."
+              : "Check the document manually before relying on this citation."}
+            {selectedSource.quote && (
+              <div className="mt-1 border-l-2 border-current pl-2 opacity-80">
+                &ldquo;{selectedSource.quote}&rdquo;
+              </div>
+            )}
+          </div>
+        )}
         {selectedFile && isImage && (
           <>
-            {citation?.file === selectedFile &&
-              citation.evidenceKind === "visual_observation" && (
+            {selectedSource?.evidenceKind === "visual_observation" && (
                 <div className="mb-3 rounded border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-800">
                   <span className="font-semibold">AI visual observation:</span>{" "}
-                  {citation.rects.length === 0
+                  {selectedSource.rects.length === 0
                     ? "The whole image is the source; verify the visible fact directly."
                     : "Verify the highlighted region directly."}
                 </div>
@@ -269,7 +303,7 @@ export function SourceViewer({
             <ImageViewer
               batchId={batchId}
               file={selectedFile}
-              citation={citation?.file === selectedFile ? citation : null}
+              citation={selectedSource}
             />
           </>
         )}
@@ -277,7 +311,7 @@ export function SourceViewer({
           <PdfViewer
             batchId={batchId}
             file={selectedFile}
-            citation={citation?.file === selectedFile ? citation : null}
+            citation={selectedSource}
           />
         )}
       </div>

@@ -82,10 +82,24 @@ function QueueInner() {
     page: number | null,
     rects: Rect[],
     sourceWidth?: number,
-    evidenceKind?: Citation["evidenceKind"]
+    evidenceKind?: Citation["evidenceKind"],
+    quote?: string,
+    textVerified?: boolean,
+    locationResolved?: boolean,
+    highlightUnit?: Citation["highlightUnit"]
   ) => {
     setSelectedFile(file);
-    setSelectedCitation({ file, page, rects, sourceWidth, evidenceKind });
+    setSelectedCitation({
+      file,
+      page,
+      rects,
+      sourceWidth,
+      evidenceKind,
+      quote,
+      textVerified,
+      locationResolved,
+      highlightUnit,
+    });
   };
 
   const handleConfirm = async (analystAction: Action, analystRationale: string) => {
@@ -103,7 +117,19 @@ function QueueInner() {
     const updatedCase: CaseRecord = await res.json();
 
     const cases = batch.cases.map((c) => (c.caseId === updatedCase.caseId ? updatedCase : c));
-    setBatch({ ...batch, cases });
+    // Update the inbox from the confirmed server response immediately. Its
+    // action badge prefers workup.analystAction, so analyst overrides replace
+    // the recommendation tag as soon as the review is saved.
+    setBatch((current) =>
+      current
+        ? {
+            ...current,
+            cases: current.cases.map((c) =>
+              c.caseId === updatedCase.caseId ? updatedCase : c
+            ),
+          }
+        : current
+    );
 
     const nextUnreviewed = cases.find((c) => c.status !== "reviewed" && c.caseId !== updatedCase.caseId);
     if (nextUnreviewed) handleSelectCase(nextUnreviewed.caseId);
@@ -127,7 +153,7 @@ function QueueInner() {
   }
 
   return (
-    <div className="grid h-screen grid-cols-[260px_420px_1fr]">
+    <div className="grid h-dvh min-h-0 grid-cols-[240px_500px_minmax(0,1fr)] overflow-hidden">
       <Inbox cases={batch.cases} selectedCaseId={selectedCaseId} onSelect={handleSelectCase} />
 
       {selectedCase ? (
@@ -138,7 +164,7 @@ function QueueInner() {
           onConfirm={handleConfirm}
         />
       ) : (
-        <div className="border-r border-slate-200 bg-white p-4 text-sm text-slate-400">
+        <div className="min-h-0 overflow-auto border-r border-slate-200 bg-white p-4 text-sm text-slate-400">
           Select a case from the inbox.
         </div>
       )}

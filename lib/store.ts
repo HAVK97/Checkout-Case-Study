@@ -62,20 +62,13 @@ export function updateCase(
   return batch.cases[idx];
 }
 
-// Load sample: map data/cases.json against data/Merchant Evidence Files by
-// basename. No copying — the sample batch reads the provided dataset
-// directly. Missing files do not block the case; they show up as gaps.
-export function createSampleBatch(): Batch {
-  const casesRaw: RawCase[] = JSON.parse(
-    fs.readFileSync(path.join(DATA_DIR, "cases.json"), "utf-8")
-  );
-  const available = new Set(fs.readdirSync(EVIDENCE_DIR));
-
-  const cases: CaseRecord[] = casesRaw.map((raw) => {
+function mapCasesToFiles(casesRaw: RawCase[], available: Set<string>): CaseRecord[] {
+  return casesRaw.map((raw) => {
     const files: string[] = [];
     const missing: string[] = [];
     for (const doc of raw.merchant_evidence_documents) {
-      if (available.has(doc)) files.push(doc);
+      const basename = path.basename(doc);
+      if (available.has(basename)) files.push(basename);
       else missing.push(doc);
     }
     return {
@@ -86,12 +79,50 @@ export function createSampleBatch(): Batch {
       status: "parsing",
     };
   });
+}
 
+function createBatch(filesDir: string, casesRaw: RawCase[]): Batch {
+  const available = new Set(fs.readdirSync(filesDir));
   const batch: Batch = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
-    filesDir: EVIDENCE_DIR,
-    cases,
+    filesDir,
+    cases: mapCasesToFiles(casesRaw, available),
+  };
+  saveBatch(batch);
+  return batch;
+}
+
+// Load sample: map data/cases.json against data/Merchant Evidence Files by
+// basename. No copying — the sample batch reads the provided dataset
+// directly. Missing files do not block the case; they show up as gaps.
+export function createSampleBatch(): Batch {
+  const casesRaw: RawCase[] = JSON.parse(
+    fs.readFileSync(path.join(DATA_DIR, "cases.json"), "utf-8")
+  );
+  return createBatch(EVIDENCE_DIR, casesRaw);
+}
+
+export function createUploadedBatch(
+  casesRaw: RawCase[],
+  files: { name: string; data: Buffer }[]
+): Batch {
+  const id = crypto.randomUUID();
+  const filesDir = path.join(CACHE_DIR, "uploads", id);
+  fs.mkdirSync(filesDir, { recursive: true });
+
+  for (const file of files) {
+    const safeName = path.basename(file.name);
+    if (!safeName || safeName === "." || safeName === "..") continue;
+    fs.writeFileSync(path.join(filesDir, safeName), file.data);
+  }
+
+  const available = new Set(fs.readdirSync(filesDir));
+  const batch: Batch = {
+    id,
+    createdAt: new Date().toISOString(),
+    filesDir,
+    cases: mapCasesToFiles(casesRaw, available),
   };
   saveBatch(batch);
   return batch;
